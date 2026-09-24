@@ -900,6 +900,41 @@ tr:hover td{
     }
 }
 
+
+
+/* ================= QRIS PAYMENT ================= */
+.qris-wrap{
+    text-align:center;
+    background:linear-gradient(135deg,#eff6ff,#f5f3ff);
+    border:1px solid #dbeafe;
+    border-radius:18px;
+    padding:20px;
+}
+.qris-image{
+    width:min(300px,100%);
+    aspect-ratio:1/1;
+    object-fit:contain;
+    background:white;
+    border:1px solid #e5e7eb;
+    border-radius:14px;
+    padding:10px;
+    margin:12px auto;
+}
+.payment-status-box{
+    margin-top:15px;
+    padding:12px 15px;
+    border-radius:12px;
+    background:#f8fafc;
+}
+.proof-image{
+    max-width:220px;
+    max-height:260px;
+    object-fit:contain;
+    border-radius:12px;
+    border:1px solid #e5e7eb;
+    background:#fff;
+}
+
 /* ================= PRINT ================= */
 
 @media print{
@@ -1016,6 +1051,10 @@ tr:hover td{
 
             <button onclick="showAdminPage('transactions',this)">
                 💳 Transaksi
+            </button>
+
+            <button onclick="showAdminPage('qris',this)">
+                📲 Pembayaran QRIS
             </button>
 
             <div class="nav-title">Laporan</div>
@@ -1157,6 +1196,7 @@ const DB_KEYS = {
     categories: "rental_categories_v1",
     bookings: "rental_bookings_v1",
     transactions: "rental_transactions_v1",
+    qris: "rental_qris_v1",
     session: "rental_session_v1"
 };
 
@@ -1164,11 +1204,23 @@ let products = JSON.parse(localStorage.getItem(DB_KEYS.products) || "[]");
 let categories = JSON.parse(localStorage.getItem(DB_KEYS.categories) || "[]");
 let bookings = JSON.parse(localStorage.getItem(DB_KEYS.bookings) || "[]");
 let transactions = JSON.parse(localStorage.getItem(DB_KEYS.transactions) || "[]");
+let qrisSettings = JSON.parse(localStorage.getItem(DB_KEYS.qris) || '{"image":"","name":"Rimba Outdoor","account":"QRIS"}');
 
 let customerCart = [];
 
 let currentAdminPage = "dashboard";
 let currentCustomerPage = "catalog";
+
+transactions.forEach(t=>{
+    if(t.paymentProof===undefined) t.paymentProof="";
+    if(t.paymentSubmittedAt===undefined) t.paymentSubmittedAt="";
+    if(t.paymentVerifiedAt===undefined) t.paymentVerifiedAt="";
+});
+bookings.forEach(b=>{
+    if(b.paymentStatus===undefined) b.paymentStatus="Belum Lunas";
+    if(b.paymentProof===undefined) b.paymentProof="";
+});
+
 
 /* =========================================================
    DEFAULT DATA
@@ -1280,6 +1332,13 @@ function saveTransactions(){
     localStorage.setItem(
         DB_KEYS.transactions,
         JSON.stringify(transactions)
+    );
+}
+
+function saveQris(){
+    localStorage.setItem(
+        DB_KEYS.qris,
+        JSON.stringify(qrisSettings)
     );
 }
 
@@ -1530,6 +1589,9 @@ function showAdminPage(page,button){
     if(page==="transactions")
         renderTransactions();
 
+    if(page==="qris")
+        renderQrisSettings();
+
     if(page==="rentalReport")
         renderRentalReport();
 
@@ -1545,6 +1607,7 @@ function pageTitle(page){
         catalog:"Katalog Barang",
         booking:"Booking",
         transactions:"Transaksi",
+        qris:"Pembayaran QRIS",
         rentalReport:"Report Penyewaan",
         stockReport:"Report Stock"
     };
@@ -3184,6 +3247,11 @@ function viewBooking(id){
             </div>
 
             <div>
+                <small>Durasi Sewa</small>
+                <h4>${b.rentalDays || calculateRentalDays(b.startDate,b.endDate)} hari</h4>
+            </div>
+
+            <div>
                 <small>Status</small>
                 <h4>${statusBadge(b.status)}</h4>
             </div>
@@ -3232,6 +3300,17 @@ function viewBooking(id){
 
             </div>
 
+        </div>
+
+        <div style="margin-top:18px;" class="payment-status-box">
+            <strong>Status Pembayaran</strong>
+            <div style="margin-top:6px;">
+                ${paymentBadge(
+                    transactions.find(t=>t.bookingId===b.id)?.paymentStatus ||
+                    b.paymentStatus ||
+                    "Belum Lunas"
+                )}
+            </div>
         </div>
 
         <div style="margin-top:18px;">
@@ -3568,25 +3647,26 @@ function filterTransactions(){
 
 }
 
+function paymentBadge(status){
+    const map={
+        "Lunas":"badge-success",
+        "Menunggu Verifikasi":"badge-info",
+        "Belum Lunas":"badge-warning",
+        "Ditolak":"badge-danger"
+    };
+    return `<span class="badge ${map[status] || "badge-gray"}">${escapeHtml(status || "Belum Lunas")}</span>`;
+}
+
 function transactionTable(list){
 
     if(list.length===0){
-
-        return `
-            <div class="empty">
-                Belum ada transaksi
-            </div>
-        `;
-
+        return `<div class="empty">Belum ada transaksi</div>`;
     }
 
     return `
         <div class="table-wrapper">
-
             <table>
-
                 <thead>
-
                     <tr>
                         <th>ID</th>
                         <th>Booking</th>
@@ -3594,91 +3674,231 @@ function transactionTable(list){
                         <th>Tanggal</th>
                         <th>Total</th>
                         <th>Pembayaran</th>
+                        <th>Bukti</th>
                         <th>Status Booking</th>
                     </tr>
-
                 </thead>
-
                 <tbody>
-
                 ${list.map(t=>`
-
                     <tr>
-
+                        <td><strong>${escapeHtml(t.id)}</strong></td>
+                        <td>${escapeHtml(t.bookingId)}</td>
+                        <td>${escapeHtml(t.customerName)}</td>
+                        <td>${formatDate(t.date)}</td>
+                        <td>${formatCurrency(t.total)}</td>
                         <td>
-                            <strong>${t.id}</strong>
+                            ${paymentBadge(t.paymentStatus)}
+                            <div style="margin-top:7px;display:flex;gap:5px;flex-wrap:wrap;">
+                                ${t.paymentStatus==="Menunggu Verifikasi" ? `
+                                    <button class="btn btn-success" onclick="verifyPayment('${t.id}')">
+                                        ✓ Verifikasi
+                                    </button>
+                                    <button class="btn btn-danger" onclick="rejectPayment('${t.id}')">
+                                        ✕ Tolak
+                                    </button>
+                                ` : ""}
+                                ${t.paymentStatus==="Belum Lunas" ? `
+                                    <button class="btn btn-warning" onclick="togglePayment('${t.id}')">
+                                        Tandai Lunas
+                                    </button>
+                                ` : ""}
+                            </div>
                         </td>
-
                         <td>
-                            ${t.bookingId}
+                            ${t.paymentProof ? `
+                                <button class="btn btn-light" onclick="viewPaymentProof('${t.id}')">
+                                    👁️ Lihat
+                                </button>
+                            ` : `<span class="badge badge-gray">Belum ada</span>`}
                         </td>
-
-                        <td>
-                            ${escapeHtml(t.customerName)}
-                        </td>
-
-                        <td>
-                            ${formatDate(t.date)}
-                        </td>
-
-                        <td>
-                            ${formatCurrency(t.total)}
-                        </td>
-
-                        <td>
-
-                            <button
-                                class="btn ${
-                                    t.paymentStatus==="Lunas"
-                                    ?"btn-success"
-                                    :"btn-warning"
-                                }"
-                                onclick="togglePayment('${t.id}')"
-                            >
-                                ${t.paymentStatus}
-                            </button>
-
-                        </td>
-
-                        <td>
-                            ${statusBadge(t.bookingStatus)}
-                        </td>
-
+                        <td>${statusBadge(t.bookingStatus)}</td>
                     </tr>
-
                 `).join("")}
-
                 </tbody>
-
             </table>
-
         </div>
     `;
-
 }
 
 function togglePayment(id){
 
-    const t =
-        transactions.find(
-            x=>x.id===id
-        );
-
+    const t=transactions.find(x=>x.id===id);
     if(!t) return;
 
-    t.paymentStatus =
-        t.paymentStatus==="Lunas"
-        ?"Belum Lunas"
-        :"Lunas";
+    t.paymentStatus=t.paymentStatus==="Lunas" ? "Belum Lunas" : "Lunas";
+
+    const b=bookings.find(x=>x.id===t.bookingId);
+    if(b) b.paymentStatus=t.paymentStatus;
 
     saveTransactions();
-
+    saveBookings();
     filterTransactions();
 
-    showToast(
-        "Status pembayaran diperbarui"
-    );
+    showToast("Status pembayaran diperbarui");
+}
 
+function verifyPayment(id){
+
+    const t=transactions.find(x=>x.id===id);
+    if(!t) return;
+
+    t.paymentStatus="Lunas";
+    t.paymentVerifiedAt=new Date().toISOString();
+
+    const b=bookings.find(x=>x.id===t.bookingId);
+    if(b){
+        b.paymentStatus="Lunas";
+        b.paymentVerifiedAt=t.paymentVerifiedAt;
+    }
+
+    saveTransactions();
+    saveBookings();
+    filterTransactions();
+
+    showToast("Pembayaran berhasil diverifikasi","success");
+}
+
+function rejectPayment(id){
+
+    const t=transactions.find(x=>x.id===id);
+    if(!t) return;
+
+    t.paymentStatus="Ditolak";
+
+    const b=bookings.find(x=>x.id===t.bookingId);
+    if(b) b.paymentStatus="Ditolak";
+
+    saveTransactions();
+    saveBookings();
+    filterTransactions();
+
+    showToast("Bukti pembayaran ditolak","info");
+}
+
+function viewPaymentProof(id){
+
+    const t=transactions.find(x=>x.id===id);
+    if(!t || !t.paymentProof) return;
+
+    document.getElementById("modalTitle").textContent="Bukti Pembayaran";
+
+    document.getElementById("modalBody").innerHTML=`
+        <div style="text-align:center;">
+            <p style="color:#64748b;margin-bottom:15px;">
+                Booking <strong>${escapeHtml(t.bookingId)}</strong>
+            </p>
+            <img src="${t.paymentProof}" class="proof-image"
+                 style="max-width:100%;max-height:55vh;"
+                 alt="Bukti pembayaran">
+            <div style="margin-top:15px;">
+                ${paymentBadge(t.paymentStatus)}
+            </div>
+        </div>
+    `;
+
+    document.getElementById("modalFooter").innerHTML=`
+        <button class="btn btn-light" onclick="closeModal()">Tutup</button>
+        ${t.paymentStatus==="Menunggu Verifikasi" ? `
+            <button class="btn btn-danger" onclick="closeModal();rejectPayment('${t.id}')">Tolak</button>
+            <button class="btn btn-success" onclick="closeModal();verifyPayment('${t.id}')">✓ Verifikasi</button>
+        ` : ""}
+    `;
+
+    openModal();
+}
+
+/* =========================================================
+   QRIS SETTINGS
+========================================================= */
+
+function renderQrisSettings(){
+
+    document.getElementById("adminContent").innerHTML=`
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <strong>Pengaturan Pembayaran QRIS</strong>
+                    <div style="color:#6b7280;font-size:12px;margin-top:3px;">
+                        Upload QRIS yang akan tampil setelah customer melakukan booking.
+                    </div>
+                </div>
+                ${qrisSettings.image ? '<span class="badge badge-success">QRIS Aktif</span>' : '<span class="badge badge-warning">Belum Diatur</span>'}
+            </div>
+
+            <div class="card-body">
+                <div class="grid-2">
+                    <div>
+                        <div class="form-group">
+                            <label>Nama Merchant</label>
+                            <input id="qrisName" class="form-control"
+                                value="${escapeHtml(qrisSettings.name || "Rimba Outdoor")}"
+                                placeholder="Nama merchant">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Nama/Identitas QRIS</label>
+                            <input id="qrisAccount" class="form-control"
+                                value="${escapeHtml(qrisSettings.account || "QRIS")}"
+                                placeholder="Contoh: Rimba Outdoor">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Upload QRIS</label>
+                            <input id="qrisFile" type="file" class="form-control" accept="image/*">
+                            <small style="color:#64748b;">
+                                Upload gambar QRIS dari komputer.
+                            </small>
+                        </div>
+
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="saveQrisSettings()">💾 Simpan QRIS</button>
+                            ${qrisSettings.image ? '<button class="btn btn-danger" onclick="removeQris()">🗑️ Hapus QRIS</button>' : ''}
+                        </div>
+                    </div>
+
+                    <div class="qris-wrap">
+                        <strong>Preview QRIS</strong>
+                        ${qrisSettings.image
+                            ? `<img src="${qrisSettings.image}" class="qris-image" alt="QRIS Preview">`
+                            : `<div class="empty"><div class="empty-icon">📲</div>Belum ada QRIS</div>`}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function saveQrisSettings(){
+
+    const name=document.getElementById("qrisName").value.trim();
+    const account=document.getElementById("qrisAccount").value.trim();
+    const file=document.getElementById("qrisFile").files[0];
+
+    qrisSettings.name=name || "Rimba Outdoor";
+    qrisSettings.account=account || "QRIS";
+
+    if(file){
+        const reader=new FileReader();
+        reader.onload=function(e){
+            qrisSettings.image=e.target.result;
+            saveQris();
+            renderQrisSettings();
+            showToast("QRIS berhasil disimpan","success");
+        };
+        reader.readAsDataURL(file);
+    }else{
+        saveQris();
+        renderQrisSettings();
+        showToast("Pengaturan QRIS berhasil disimpan","success");
+    }
+}
+
+function removeQris(){
+    if(!confirm("Hapus QRIS?")) return;
+    qrisSettings.image="";
+    saveQris();
+    renderQrisSettings();
+    showToast("QRIS dihapus","info");
 }
 
 /* =========================================================
@@ -5205,61 +5425,20 @@ function openBookingForm(){
                 border-radius:10px;
             ">
 
-                <strong>Ringkasan Barang</strong>
+                <strong>Ringkasan Sewa</strong>
 
-                <div style="margin-top:10px;">
-
-                    ${customerCart.map(item=>{
-
-                        const p =
-                            products.find(
-                                x=>x.id===item.productId
-                            );
-
-                        return `
-
-                            <div style="
-                                display:flex;
-                                justify-content:space-between;
-                                padding:7px 0;
-                            ">
-
-                                <span>
-                                    ${escapeHtml(p.name)}
-                                    × ${item.qty}
-                                </span>
-
-                                <strong>
-                                    ${formatCurrency(
-                                        p.price*item.qty
-                                    )}
-                                </strong>
-
-                            </div>
-
-                        `;
-
-                    }).join("")}
-
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+                    <div style="background:white;padding:12px;border-radius:9px;border:1px solid #e5e7eb;">
+                        <div style="font-size:11px;color:#64748b;">Durasi Sewa</div>
+                        <strong id="customerRentalDuration" style="font-size:18px;color:#2563eb;">-</strong>
+                    </div>
+                    <div style="background:white;padding:12px;border-radius:9px;border:1px solid #e5e7eb;">
+                        <div style="font-size:11px;color:#64748b;">Total Pembayaran</div>
+                        <strong id="customerRentalTotal" style="font-size:18px;color:#16a34a;">Rp0</strong>
+                    </div>
                 </div>
 
-                <div style="
-                    border-top:1px solid #e5e7eb;
-                    margin-top:10px;
-                    padding-top:10px;
-                    display:flex;
-                    justify-content:space-between;
-                ">
-
-                    <strong>Total</strong>
-
-                    <strong style="color:#2563eb;">
-                        ${formatCurrency(
-                            cartTotal()
-                        )}
-                    </strong>
-
-                </div>
+                <div id="customerRentalItems" style="margin-top:10px;"></div>
 
             </div>
 
@@ -5285,25 +5464,73 @@ function openBookingForm(){
 
     `;
 
+    document.getElementById("customerStartDate").addEventListener("change",updateCustomerRentalSummary);
+    document.getElementById("customerEndDate").addEventListener("change",updateCustomerRentalSummary);
+
     openModal();
+    updateCustomerRentalSummary();
 
 }
 
-function cartTotal(){
+function calculateRentalDays(startDate,endDate){
+
+    if(!startDate || !endDate) return 0;
+
+    const start = new Date(startDate + "T00:00:00");
+    const end = new Date(endDate + "T00:00:00");
+    const diff = end.getTime() - start.getTime();
+
+    return Math.round(diff / (1000 * 60 * 60 * 24));
+
+}
+
+function updateCustomerRentalSummary(){
+
+    const start = document.getElementById("customerStartDate")?.value || "";
+    const end = document.getElementById("customerEndDate")?.value || "";
+    const days = calculateRentalDays(start,end);
+    const durationEl = document.getElementById("customerRentalDuration");
+    const totalEl = document.getElementById("customerRentalTotal");
+    const itemsEl = document.getElementById("customerRentalItems");
+
+    if(durationEl){
+        durationEl.textContent = days > 0 ? `${days} hari` : "-";
+    }
+
+    if(itemsEl){
+        itemsEl.innerHTML = customerCart.map(item=>{
+            const p = products.find(x=>x.id===item.productId);
+            if(!p) return "";
+            const subtotal = Number(p.price) * Number(item.qty) * Math.max(days,1);
+            return `
+                <div style="display:flex;justify-content:space-between;padding:7px 0;">
+                    <span>${escapeHtml(p.name)} × ${item.qty} × ${days > 0 ? days : 1} hari</span>
+                    <strong>${formatCurrency(subtotal)}</strong>
+                </div>
+            `;
+        }).join("");
+    }
+
+    if(totalEl){
+        const total = days > 0 ? cartTotal(days) : cartTotal(1);
+        totalEl.textContent = formatCurrency(total);
+    }
+}
+
+function cartTotal(days=1){
+
+    const rentalDays = Math.max(Number(days) || 1, 1);
 
     return customerCart.reduce(
         (sum,item)=>{
 
-            const p =
-                products.find(
-                    x=>x.id===item.productId
-                );
+            const p = products.find(x=>x.id===item.productId);
 
-            return sum +
-                (
-                    Number(p?.price || 0) *
-                    Number(item.qty)
-                );
+            return sum + (
+                Number(p?.price || 0) *
+                Number(item.qty) *
+                rentalDays
+            );
 
         },
         0
@@ -5354,7 +5581,7 @@ function submitBooking(){
 
     }
 
-    if(endDate<startDate){
+    if(endDate<=startDate){
 
         showToast(
             "Tanggal kembali tidak boleh sebelum tanggal sewa",
@@ -5363,6 +5590,13 @@ function submitBooking(){
 
         return;
 
+    }
+
+    const rentalDays = calculateRentalDays(startDate,endDate);
+
+    if(rentalDays <= 0){
+        showToast("Durasi sewa harus minimal 1 hari", "error");
+        return;
     }
 
     /*
@@ -5414,7 +5648,8 @@ function submitBooking(){
                 price:Number(p.price),
                 subtotal:
                     Number(p.price) *
-                    Number(item.qty)
+                    Number(item.qty) *
+                    rentalDays
 
             };
 
@@ -5449,6 +5684,7 @@ function submitBooking(){
         phone:phone,
         startDate,
         endDate,
+        rentalDays,
         note,
         items,
         total,
@@ -5467,7 +5703,10 @@ function submitBooking(){
         date:new Date().toISOString().split("T")[0],
         total,
         paymentStatus:"Belum Lunas",
-        bookingStatus:"Booking"
+        bookingStatus:"Booking",
+        paymentProof:"",
+        paymentSubmittedAt:"",
+        paymentVerifiedAt:""
 
     };
 
@@ -5509,86 +5748,145 @@ function showBookingSuccess(booking){
 
     document.getElementById("modalBody").innerHTML = `
 
-        <div style="
-            text-align:center;
-            padding:15px;
-        ">
+        <div style="padding:5px;">
 
-            <div style="
-                width:70px;
-                height:70px;
-                border-radius:50%;
-                background:#dcfce7;
-                color:#16a34a;
-                display:flex;
-                align-items:center;
-                justify-content:center;
-                font-size:35px;
-                margin:auto;
-            ">
-                ✓
+            <div style="text-align:center;">
+                <div style="
+                    width:70px;height:70px;border-radius:50%;
+                    background:#dcfce7;color:#16a34a;
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:35px;margin:auto;
+                ">✓</div>
+
+                <h2 style="margin-top:15px;">Booking Berhasil</h2>
+                <p style="color:#64748b;margin-top:7px;">
+                    Simpan nomor booking dan lakukan pembayaran melalui QRIS.
+                </p>
+
+                <div style="
+                    background:#eff6ff;color:#1d4ed8;padding:15px;
+                    border-radius:10px;margin-top:18px;
+                    font-size:20px;font-weight:800;
+                ">${booking.id}</div>
             </div>
 
-            <h2 style="margin-top:15px;">
-                Booking Berhasil
-            </h2>
-
-            <p style="
-                color:#64748b;
-                margin-top:7px;
-            ">
-                Simpan nomor booking berikut.
-            </p>
-
-            <div style="
-                background:#eff6ff;
-                color:#1d4ed8;
-                padding:15px;
-                border-radius:10px;
-                margin-top:18px;
-                font-size:20px;
-                font-weight:800;
-            ">
-                ${booking.id}
-            </div>
-
-            <div style="
-                margin-top:20px;
-                text-align:left;
-            ">
-
+            <div style="margin-top:20px;">
                 <strong>Customer</strong>
                 <p>${escapeHtml(booking.customerName)}</p>
-
-                <strong>Total</strong>
-                <p>${formatCurrency(booking.total)}</p>
-
+                <strong>Total Pembayaran</strong>
+                <p style="font-size:20px;font-weight:800;color:#2563eb;">
+                    ${formatCurrency(booking.total)}
+                </p>
             </div>
 
-        </div>
+            ${qrisSettings.image ? `
+                <div class="qris-wrap" style="margin-top:18px;">
+                    <strong style="font-size:16px;">📲 Scan QRIS untuk Membayar</strong>
+                    <div style="color:#64748b;font-size:12px;margin-top:5px;">
+                        ${escapeHtml(qrisSettings.name || "Rimba Outdoor")}
+                        ${qrisSettings.account ? " • " + escapeHtml(qrisSettings.account) : ""}
+                    </div>
+                    <img src="${qrisSettings.image}" class="qris-image" alt="QRIS Pembayaran">
+                    <div style="font-size:12px;color:#64748b;">
+                        Pastikan nominal pembayaran sesuai total booking.
+                    </div>
+                </div>
+            ` : `
+                <div style="
+                    margin-top:18px;padding:15px;border-radius:12px;
+                    background:#fff7ed;color:#9a3412;
+                ">
+                    QRIS belum diatur oleh admin. Silakan hubungi admin.
+                </div>
+            `}
 
+            <div class="form-group" style="margin-top:18px;">
+                <label>Upload Bukti Pembayaran</label>
+                <input type="file" id="paymentProofFile" class="form-control" accept="image/*">
+                <div id="paymentProofPreview" style="margin-top:10px;"></div>
+                <small style="color:#64748b;">
+                    JPG/PNG/WebP. Bukti akan disimpan pada data booking browser ini.
+                </small>
+            </div>
+
+            <div id="paymentProofInfo"></div>
+        </div>
     `;
 
-    document.getElementById("modalFooter").innerHTML = `
+    const fileInput=document.getElementById("paymentProofFile");
+    fileInput.addEventListener("change",previewPaymentProof);
 
-        <button
-            class="btn btn-light"
-            onclick="closeModal();customerGo('bookings')"
-        >
+    document.getElementById("modalFooter").innerHTML = `
+        <button class="btn btn-light"
+            onclick="closeModal();customerGo('bookings')">
             Lihat Booking
         </button>
-
-        <button
-            class="btn btn-primary"
-            onclick="closeModal()"
-        >
-            Selesai
+        <button class="btn btn-success"
+            onclick="submitPaymentProof('${booking.id}')">
+            📤 Kirim Bukti Pembayaran
         </button>
-
     `;
 
     openModal();
+}
 
+function previewPaymentProof(e){
+    const file=e.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=function(ev){
+        document.getElementById("paymentProofPreview").innerHTML=`
+            <img src="${ev.target.result}" class="proof-image" alt="Preview bukti pembayaran">
+        `;
+    };
+    reader.readAsDataURL(file);
+}
+
+function submitPaymentProof(bookingId){
+
+    const file=document.getElementById("paymentProofFile")?.files[0];
+
+    if(!file){
+        showToast("Silakan upload bukti pembayaran terlebih dahulu","error");
+        return;
+    }
+
+    const booking=bookings.find(b=>b.id===bookingId);
+    const transaction=transactions.find(t=>t.bookingId===bookingId);
+
+    if(!booking || !transaction){
+        showToast("Data booking tidak ditemukan","error");
+        return;
+    }
+
+    const reader=new FileReader();
+
+    reader.onload=function(e){
+        transaction.paymentProof=e.target.result;
+        transaction.paymentSubmittedAt=new Date().toISOString();
+        transaction.paymentStatus="Menunggu Verifikasi";
+
+        booking.paymentStatus="Menunggu Verifikasi";
+        booking.paymentProof=e.target.result;
+        booking.paymentSubmittedAt=transaction.paymentSubmittedAt;
+
+        saveBookings();
+        saveTransactions();
+
+        closeModal();
+        showToast("Bukti pembayaran berhasil dikirim. Menunggu verifikasi admin.","success");
+        customerGo("bookings");
+    };
+
+    reader.readAsDataURL(file);
+}
+
+function openPaymentForBooking(bookingId){
+
+    const booking=bookings.find(b=>b.id===bookingId);
+    if(!booking) return;
+
+    showBookingSuccess(booking);
 }
 
 /* =========================================================
@@ -5755,22 +6053,28 @@ function customerBookingCards(){
                             margin-top:15px;
                             padding-top:12px;
                             border-top:1px solid #e5e7eb;
-                            display:flex;
-                            justify-content:space-between;
-                            align-items:center;
                         ">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <strong>${formatCurrency(b.total)}</strong>
+                                ${paymentBadge(
+                                    transactions.find(t=>t.bookingId===b.id)?.paymentStatus ||
+                                    b.paymentStatus ||
+                                    "Belum Lunas"
+                                )}
+                            </div>
 
-                            <strong>
-                                ${formatCurrency(b.total)}
-                            </strong>
-
-                            <button
-                                class="btn btn-light"
-                                onclick="viewBooking('${b.id}')"
-                            >
-                                Detail
-                            </button>
-
+                            <div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap;">
+                                <button class="btn btn-light"
+                                    onclick="viewBooking('${b.id}')">
+                                    Detail
+                                </button>
+                                ${(transactions.find(t=>t.bookingId===b.id)?.paymentStatus || b.paymentStatus) !== "Lunas" ? `
+                                    <button class="btn btn-primary"
+                                        onclick="openPaymentForBooking('${b.id}')">
+                                        📲 Bayar / Upload Bukti
+                                    </button>
+                                ` : ""}
+                            </div>
                         </div>
 
                     </div>
@@ -5908,6 +6212,16 @@ function openManualBooking(){
 
         </div>
 
+        <div style="margin-top:12px;background:#eff6ff;padding:12px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:13px;color:#475569;">Durasi Sewa</span>
+            <strong id="manualRentalDuration" style="color:#2563eb;">-</strong>
+        </div>
+
+        <div style="margin-top:8px;background:#f0fdf4;padding:12px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:13px;color:#475569;">Total Otomatis</span>
+            <strong id="manualRentalTotal" style="color:#16a34a;">Rp0</strong>
+        </div>
+
     `;
 
     document.getElementById("modalFooter").innerHTML = `
@@ -5928,8 +6242,22 @@ function openManualBooking(){
 
     `;
 
-    openModal();
+    document.getElementById("manualStart").addEventListener("change",updateManualRentalSummary);
+    document.getElementById("manualEnd").addEventListener("change",updateManualRentalSummary);
 
+    openModal();
+    updateManualRentalSummary();
+
+}
+
+function updateManualRentalSummary(){
+    const start=document.getElementById("manualStart")?.value || "";
+    const end=document.getElementById("manualEnd")?.value || "";
+    const days=calculateRentalDays(start,end);
+    const durationEl=document.getElementById("manualRentalDuration");
+    const totalEl=document.getElementById("manualRentalTotal");
+    if(durationEl) durationEl.textContent=days>0 ? `${days} hari` : "-";
+    if(totalEl) totalEl.textContent=formatCurrency(days>0 ? cartTotal(days) : cartTotal(1));
 }
 
 function addManualItem(){
@@ -5994,6 +6322,7 @@ function addManualItem(){
     }
 
     renderManualItems();
+    updateManualRentalSummary();
 
 }
 
@@ -6035,7 +6364,10 @@ function renderManualItems(){
 
                         <strong>
                             ${formatCurrency(
-                                p.price*item.qty
+                                p.price*item.qty*Math.max(calculateRentalDays(
+                                    document.getElementById("manualStart")?.value || "",
+                                    document.getElementById("manualEnd")?.value || ""
+                                ),1)
                             )}
                         </strong>
 
@@ -6089,7 +6421,7 @@ function saveManualBooking(){
 
     }
 
-    if(end<start){
+    if(end<=start){
 
         showToast(
             "Tanggal tidak valid",
@@ -6098,6 +6430,13 @@ function saveManualBooking(){
 
         return;
 
+    }
+
+    const rentalDays = calculateRentalDays(start,end);
+
+    if(rentalDays <= 0){
+        showToast("Durasi sewa harus minimal 1 hari", "error");
+        return;
     }
 
     for(const item of customerCart){
@@ -6139,7 +6478,7 @@ function saveManualBooking(){
                 qty:item.qty,
                 price:p.price,
                 subtotal:
-                    p.price*item.qty
+                    p.price*item.qty*rentalDays
 
             };
 
@@ -6172,6 +6511,7 @@ function saveManualBooking(){
         phone,
         startDate:start,
         endDate:end,
+        rentalDays,
         note:"",
         items,
         total,
@@ -6363,6 +6703,7 @@ function printBooking(id){
                 ${formatDate(b.startDate)}
                 -
                 ${formatDate(b.endDate)}
+                (${b.rentalDays || calculateRentalDays(b.startDate,b.endDate)} hari)
             </p>
 
             <table>
